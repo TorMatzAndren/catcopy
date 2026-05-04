@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+clipboard_copy() {
+  if command -v xclip >/dev/null 2>&1; then
+    xclip -selection clipboard
+  elif command -v wl-copy >/dev/null 2>&1; then
+    wl-copy
+  else
+    echo "ERROR: no clipboard tool found. Install xclip or wl-clipboard." >&2
+    exit 1
+  fi
+}
+
+show_help() {
+  cat <<'HELP'
+catcopy / c
+
+Purpose:
+  Copy file contents, stdin, or command output to the clipboard.
+
+Usage:
+  c <file> [file2 ...]
+      Copy one or more files with transport headers.
+
+  command | c
+      Copy stdin directly to clipboard.
+
+  c -- <command> [args ...]
+      Run command and copy stdout to clipboard.
+
+  c --help
+      Show this help.
+
+Examples:
+  c script.py
+  c file1.py file2.md
+  sed -n '1,120p' file.py | c
+  jq '.' data.json | c
+  c -- sed -n '1,120p' file.py
+  c -- jq '.items[] | .name' data.json
+
+Notes:
+  File mode adds transport headers.
+  Stdin and command mode copy raw output without transport headers.
+HELP
+}
+
+copy_files() {
+  {
+    for file in "$@"; do
+      if [[ ! -f "$file" ]]; then
+        echo "ERROR: file not found: $file" >&2
+        exit 1
+      fi
+
+      echo "===== TRANSPORT HEADER (NOT PART OF FILE) ====="
+      echo "PATH: $file"
+      echo "NOTE: Do NOT include this header in any saved documents."
+      echo "==============================================="
+      cat "$file"
+      echo
+    done
+  } | clipboard_copy
+
+  echo "Copied file(s) to clipboard: $*"
+}
+
+copy_stdin() {
+  cat | clipboard_copy
+  echo "Copied stdin to clipboard"
+}
+
+copy_command() {
+  "$@" | clipboard_copy
+  echo "Copied command output to clipboard: $*"
+}
+
+main() {
+  if [[ $# -eq 0 ]]; then
+    if [[ -t 0 ]]; then
+      show_help >&2
+      exit 1
+    fi
+
+    copy_stdin
+    exit 0
+  fi
+
+  case "${1:-}" in
+    -h|--help|help)
+      show_help
+      ;;
+    --)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "ERROR: missing command after --" >&2
+        exit 1
+      fi
+      copy_command "$@"
+      ;;
+    *)
+      copy_files "$@"
+      ;;
+  esac
+}
+
+main "$@"
