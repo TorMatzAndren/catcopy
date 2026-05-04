@@ -69,3 +69,9 @@ NOTE: Do NOT include this header in any saved documents.
 ===============================================
 
 Stdin mode and command mode copy raw output without headers.
+
+Tip:
+  Some interactive tools format output for terminal display.
+  For Ollama captures, prefer:
+
+    c --batch name -- ollama run --nowordwrap <model> "<prompt>"

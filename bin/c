@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+STATE_DIR="${TMPDIR:-/tmp}/catcopy-${USER:-user}"
+
 clipboard_copy() {
   if command -v xclip >/dev/null 2>&1; then
     xclip -selection clipboard
@@ -12,12 +14,36 @@ clipboard_copy() {
   fi
 }
 
+clean_terminal_output() {
+  python3 -c '
+import re
+import sys
+
+data = sys.stdin.buffer.read().decode("utf-8", "replace")
+
+data = re.sub(r"\x1b\][^\a]*(?:\a|\x1b\\)", "", data)
+data = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", data)
+data = re.sub(r"\x1b[P^_].*?\x1b\\", "", data, flags=re.S)
+data = re.sub(r"\x1b[@-Z\\-_]", "", data)
+
+cleaned = []
+for line in data.split("\n"):
+    if "\r" in line:
+        line = line.split("\r")[-1]
+    line = re.sub(r"^[⠁⠂⠄⡀⢀⠠⠐⠈⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*", "", line)
+    cleaned.append(line)
+
+out = "\n".join(cleaned)
+out = re.sub(r"[\x08\x0b\x0c]", "", out)
+sys.stdout.write(out)
+'
+}
 show_help() {
   cat <<'HELP'
 catcopy / c
 
 Purpose:
-  Copy file contents, stdin, or command output to the clipboard.
+  Copy files, stdin, command output, or grouped command batches to clipboard.
 
 Usage:
   c <file> [file2 ...]
@@ -29,20 +55,23 @@ Usage:
   c -- <command> [args ...]
       Run command and copy stdout to clipboard.
 
-  c --help
-      Show this help.
+  c --batch <name> --clear
+      Clear a named batch.
 
-Examples:
-  c script.py
-  c file1.py file2.md
-  sed -n '1,120p' file.py | c
-  jq '.' data.json | c
-  c -- sed -n '1,120p' file.py
-  c -- jq '.items[] | .name' data.json
+  c --batch <name> -- <command> [args ...]
+      Run command, append cleaned stdout+stderr to the named batch,
+      and copy the entire batch to clipboard.
+
+  c --batch <name> --show
+      Copy the current batch contents to clipboard.
+
+  c --batch <name> --path
+      Print the batch file path.
 
 Notes:
   File mode adds transport headers.
-  Stdin and command mode copy raw output without transport headers.
+  Stdin and normal command mode copy raw output.
+  Batch mode removes common ANSI terminal control sequences.
 HELP
 }
 
@@ -76,6 +105,111 @@ copy_command() {
   echo "Copied command output to clipboard: $*"
 }
 
+batch_path() {
+  local name="$1"
+  mkdir -p "$STATE_DIR"
+
+  if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "ERROR: invalid batch name: $name" >&2
+    echo "Use only letters, numbers, dot, underscore, and dash." >&2
+    exit 1
+  fi
+
+  echo "$STATE_DIR/${name}.txt"
+}
+
+batch_clear() {
+  local name="$1"
+  local path
+  path="$(batch_path "$name")"
+
+  : > "$path"
+  echo "Cleared batch: $name"
+  echo "Path: $path"
+}
+
+batch_show() {
+  local name="$1"
+  local path
+  path="$(batch_path "$name")"
+
+  if [[ ! -f "$path" ]]; then
+    echo "ERROR: batch does not exist: $name" >&2
+    exit 1
+  fi
+
+  cat "$path" | clipboard_copy
+  echo "Copied batch to clipboard: $name"
+}
+
+batch_command() {
+  local name="$1"
+  shift
+
+  local path
+  path="$(batch_path "$name")"
+
+  local tmp_output
+  tmp_output="$(mktemp "$STATE_DIR/${name}.cmd.XXXXXX")"
+
+  local status=0
+  TERM=dumb NO_COLOR=1 COLUMNS=100000 "$@" 2>&1 | clean_terminal_output > "$tmp_output" || status=$?
+
+  {
+    echo "===== COMMAND ====="
+    printf '%q ' "$@"
+    echo
+    echo "===== EXIT STATUS ====="
+    echo "$status"
+    echo "===== OUTPUT ====="
+    cat "$tmp_output"
+    echo
+  } >> "$path"
+
+  rm -f "$tmp_output"
+
+  cat "$path" | clipboard_copy
+
+  echo "Appended command output to batch: $name"
+  echo "Copied full batch to clipboard: $path"
+
+  return "$status"
+}
+
+handle_batch() {
+  local name="$1"
+  shift
+
+  if [[ $# -eq 0 ]]; then
+    echo "ERROR: missing batch operation" >&2
+    exit 1
+  fi
+
+  case "${1:-}" in
+    --clear)
+      batch_clear "$name"
+      ;;
+    --show)
+      batch_show "$name"
+      ;;
+    --path)
+      batch_path "$name"
+      ;;
+    --)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "ERROR: missing command after --" >&2
+        exit 1
+      fi
+      batch_command "$name" "$@"
+      ;;
+    *)
+      echo "ERROR: unknown batch operation: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
 main() {
   if [[ $# -eq 0 ]]; then
     if [[ -t 0 ]]; then
@@ -90,6 +224,16 @@ main() {
   case "${1:-}" in
     -h|--help|help)
       show_help
+      ;;
+    --batch)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "ERROR: missing batch name" >&2
+        exit 1
+      fi
+      local name="$1"
+      shift
+      handle_batch "$name" "$@"
       ;;
     --)
       shift
