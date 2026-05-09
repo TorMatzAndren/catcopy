@@ -1,38 +1,187 @@
 # catcopy
 
-catcopy is a tiny clipboard pipeline tool for Linux.
+catcopy is a developer-focused clipboard pipeline tool for terminal workflows.
 
 It installs two commands:
 
-- c
-- catcopy
+- `c`
+- `catcopy`
 
 Both do the same thing.
 
-## Features
+catcopy is designed for workflows involving:
 
-c file1 file2
+- debugging
+- Git inspection
+- JSON analysis
+- command pipelines
+- LLM prompting
+- multi-file review
+- terminal diagnostics
+- copy/paste-heavy development workflows
 
-Copies files with transport headers.
+Instead of repeatedly selecting terminal output manually, catcopy lets you push files, command output, and grouped diagnostic sessions directly into the clipboard.
 
-echo "hello" | c
+---
 
-Copies stdin directly.
+# Features
 
-c -- git status --porcelain=v1 --branch
+## Copy files directly to clipboard
 
-Runs a command and copies stdout.
+    c file1.py file2.md
 
-c -- sed -n '1,120p' file.py
-c -- jq '.' data.json
+Files are copied with deterministic transport headers:
 
-Works with normal Unix tools.
+    ===== TRANSPORT HEADER (NOT PART OF FILE) =====
+    PATH: file1.py
+    NOTE: Do NOT include this header in any saved documents.
+    ===============================================
 
-## Requirements
+This preserves file boundaries during:
+
+- ChatGPT workflows
+- code review
+- debugging
+- archival
+- multi-file sharing
+
+---
+
+## Copy stdin directly
+
+    echo "hello world" | c
+
+or:
+
+    git diff | c
+
+stdin mode copies raw output without transport headers.
+
+---
+
+## Copy command output directly
+
+    c -- git status --porcelain=v1 --branch
+
+Examples:
+
+    c -- jq '.' data.json
+
+    c -- sed -n '1,120p' script.py
+
+    c -- bash -c "sed -n '1,120p' a.py; sed -n '200,260p' a.py"
+
+This is useful for:
+
+- diagnostics
+- JSON inspection
+- Git review
+- LLM prompts
+- partial-file extraction
+- command snapshots
+
+---
+
+# Batch Mode
+
+Batch mode accumulates multiple commands into a single clipboard capture.
+
+Clear batch:
+
+    c --batch debug --clear
+
+Append commands:
+
+    c --batch debug -- git status
+
+    c --batch debug -- git diff --stat
+
+    c --batch debug -- jq '.' config.json
+
+Copy full batch:
+
+    c --batch debug --show
+
+Each batch section records:
+
+- executed command
+- exit status
+- cleaned output
+
+Example structure:
+
+    ===== COMMAND =====
+    git status
+
+    ===== EXIT STATUS =====
+    0
+
+    ===== OUTPUT =====
+    On branch main
+    nothing to commit
+
+---
+
+# ANSI / Interactive CLI Cleanup
+
+Some CLI tools generate terminal-specific formatting:
+
+- ANSI escapes
+- progress bars
+- spinners
+- carriage-return rewriting
+- interactive wrapping
+
+catcopy batch mode automatically removes most terminal control sequences.
+
+This is especially useful for:
+
+- Ollama
+- progress-heavy tools
+- long-running diagnostics
+- captured terminal sessions
+
+Example:
+
+    c --batch llm -- ollama run --nowordwrap qwen3:8b "Explain this code"
+
+---
+
+# Clipboard Backend Detection
+
+catcopy chooses clipboard backends deterministically.
+
+Priority order:
+
+- Wayland session:
+  - `wl-copy`
+
+- X11 session:
+  - `xclip`
+  - `xsel`
+
+- macOS support when available:
+  - `pbcopy`
+
+- Fallback probing order:
+  - `wl-copy`
+  - `xclip`
+  - `xsel`
+
+The active environment is detected using:
+
+- `WAYLAND_DISPLAY`
+- `DISPLAY`
+
+---
+
+# Requirements
 
 One clipboard backend is required.
 
-For X11:
+## X11
+
+Install either:
 
     sudo apt install xclip
 
@@ -40,104 +189,181 @@ or:
 
     sudo apt install xsel
 
-For Wayland:
+## Wayland
 
     sudo apt install wl-clipboard
 
-catcopy chooses the backend deterministically:
+---
 
-- Wayland session: wl-copy
-- X11 session: xclip, then xsel
-- macOS support when available: pbcopy
-- Generic fallback: wl-copy, xclip, xsel
-
-## Tested Platforms
+# Tested Platforms
 
 Currently verified locally on:
 
-- Linux/X11 with xclip
+- Linux/X11 with `xclip`
 
-Implemented but not yet personally verified on real target systems:
+Routing logic verified through mocked backend testing for:
 
-- Wayland with wl-copy
-- X11 with xsel fallback
-- macOS with pbcopy
+- Wayland (`wl-copy`)
+- X11 fallback (`xsel`)
+
+Implemented but not yet personally verified on real systems:
+
+- native Wayland desktop session
+- macOS (`pbcopy`)
 
 Native Windows clipboard support is not implemented yet.
 
+---
 
-## Install from source
+# Install From Source
 
-sudo ./install.sh
+    sudo ./install.sh
 
-## Uninstall
+Installed commands:
 
-sudo ./uninstall.sh
+    /usr/local/bin/c
+    /usr/local/bin/catcopy
 
-## Build .deb
+---
 
-./build-deb.sh
+# Uninstall
 
-Install the package:
+    sudo ./uninstall.sh
 
-sudo apt install ./dist/catcopy_0.1.0_all.deb
+---
 
-## Usage
+# Build Debian Package
 
-c --help
-catcopy --help
+    ./build-deb.sh
 
-## Notes
+Install package:
 
-File mode adds transport headers:
+    sudo apt install ./dist/catcopy_0.1.0_all.deb
 
-===== TRANSPORT HEADER (NOT PART OF FILE) =====
-PATH: example.txt
-NOTE: Do NOT include this header in any saved documents.
-===============================================
+---
 
-Stdin mode and command mode copy raw output without headers.
+# Usage
 
-Tip:
-  Some interactive tools format output for terminal display.
-  For Ollama captures, prefer:
+Show help:
 
-    c --batch name -- ollama run --nowordwrap <model> "<prompt>"
+    c --help
 
-## Batch Mode & Real-World Usage
+or:
 
-When running multiple commands, you can accumulate output into a single clipboard buffer:
+    catcopy --help
 
-    c --batch myrun --clear
-    c --batch myrun -- command1
-    c --batch myrun -- command2
-    c --batch myrun --show
+---
 
-Each command is appended and the full result is copied to the clipboard.
+# Real-World Examples
 
-## Handling Interactive / Streaming Tools
+## Git review snapshot
 
-Some CLI tools like Ollama, progress bars, or spinners format output for interactive terminals.
-This can result in messy or wrapped output when captured.
+    (
+      git status
+      echo
+      git diff --stat
+    ) | c
 
-catcopy automatically removes most terminal control sequences in batch mode.
+---
 
-However, some tools require explicit flags for clean output.
+## JSON extraction
 
-Example for Ollama:
+    c -- jq '.items[] | .name' data.json
 
-    c --batch run -- ollama run --nowordwrap qwen3:8b "Explain something"
+---
 
-This avoids broken word wrapping in captured output.
+## Multi-range file extraction
 
-## Design Philosophy
+    c -- bash -c "
+    sed -n '1,120p' app.py
+    sed -n '200,260p' app.py
+    "
 
-catcopy does not try to fix or reinterpret command output.
+---
 
-Instead:
+## LLM workflow
 
-- It captures output deterministically
-- It cleans terminal control sequences
-- It leaves semantic formatting to the command itself
+    c README.md script.py notes.md
 
-If output is malformed, the correct fix is usually to adjust the command, not catcopy.
+Paste directly into ChatGPT or another LLM.
+
+---
+
+# Why not just xclip?
+
+`xclip`, `xsel`, and `wl-copy` are excellent low-level clipboard tools.
+
+catcopy focuses on higher-level developer workflows:
+
+- copying multiple files with preserved boundaries
+- direct command-output capture
+- grouped diagnostic batches
+- ANSI cleanup for interactive tools
+- deterministic clipboard backend selection
+- transport-safe copy/paste into chats and LLM workflows
+
+catcopy uses existing clipboard tools underneath rather than replacing them.
+
+---
+
+# Design Philosophy
+
+catcopy does not try to reinterpret command output.
+
+Instead it focuses on:
+
+- deterministic capture
+- explicit transport boundaries
+- minimal workflow friction
+- terminal interoperability
+- preserving command intent
+- reducing repetitive manual selection
+
+If output is malformed, the preferred fix is usually:
+
+- adjusting the command itself
+- disabling terminal formatting
+- using cleaner CLI flags
+
+rather than mutating output aggressively inside catcopy.
+
+---
+
+# Positioning
+
+catcopy is not:
+
+- a clipboard manager
+- a shell replacement
+- a terminal multiplexer
+
+It is a developer-focused clipboard capture utility for terminal workflows.
+
+---
+
+# Transparency
+
+The implementation used significant ChatGPT assistance during development.
+
+However:
+
+- the workflow design
+- command structure
+- feature direction
+- iterative refinement
+- testing
+- operational philosophy
+
+were manually driven and reviewed.
+
+---
+
+# License
+
+MIT
+
+# Author
+
+Tor Matz Andrén
+http://jarri.systems
+http://www.gbsproductions.se
