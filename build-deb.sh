@@ -23,7 +23,7 @@ Version: $VERSION
 Section: utils
 Priority: optional
 Architecture: $ARCH
-Depends: bash, xclip | wl-clipboard
+Depends: bash, xclip | wl-clipboard | xsel
 Maintainer: Matz Andrén
 Description: Clipboard pipeline tool for files, stdin, and command output
  catcopy provides c and catcopy commands for copying files with transport

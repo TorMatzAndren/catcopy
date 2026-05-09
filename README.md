@@ -30,13 +30,41 @@ Works with normal Unix tools.
 
 ## Requirements
 
-One clipboard backend is required:
+One clipboard backend is required.
 
-sudo apt install xclip
+For X11:
+
+    sudo apt install xclip
 
 or:
 
-sudo apt install wl-clipboard
+    sudo apt install xsel
+
+For Wayland:
+
+    sudo apt install wl-clipboard
+
+catcopy chooses the backend deterministically:
+
+- Wayland session: wl-copy
+- X11 session: xclip, then xsel
+- macOS support when available: pbcopy
+- Generic fallback: wl-copy, xclip, xsel
+
+## Tested Platforms
+
+Currently verified locally on:
+
+- Linux/X11 with xclip
+
+Implemented but not yet personally verified on real target systems:
+
+- Wayland with wl-copy
+- X11 with xsel fallback
+- macOS with pbcopy
+
+Native Windows clipboard support is not implemented yet.
+
 
 ## Install from source
 

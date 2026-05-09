@@ -4,12 +4,24 @@ set -euo pipefail
 STATE_DIR="${TMPDIR:-/tmp}/catcopy-${USER:-user}"
 
 clipboard_copy() {
-  if command -v xclip >/dev/null 2>&1; then
+  if [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wl-copy >/dev/null 2>&1; then
+    wl-copy
+  elif [[ -n "${DISPLAY:-}" ]] && command -v xclip >/dev/null 2>&1; then
     xclip -selection clipboard
+  elif [[ -n "${DISPLAY:-}" ]] && command -v xsel >/dev/null 2>&1; then
+    xsel --clipboard --input
+  elif command -v pbcopy >/dev/null 2>&1; then
+    pbcopy
   elif command -v wl-copy >/dev/null 2>&1; then
     wl-copy
+  elif command -v xclip >/dev/null 2>&1; then
+    xclip -selection clipboard
+  elif command -v xsel >/dev/null 2>&1; then
+    xsel --clipboard --input
   else
-    echo "ERROR: no clipboard tool found. Install xclip or wl-clipboard." >&2
+    echo "ERROR: no supported clipboard backend found." >&2
+    echo "Install one of: wl-clipboard, xclip, xsel." >&2
+    echo "Detected DISPLAY=${DISPLAY:-unset}, WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}" >&2
     exit 1
   fi
 }
@@ -38,6 +50,7 @@ out = re.sub(r"[\x08\x0b\x0c]", "", out)
 sys.stdout.write(out)
 '
 }
+
 show_help() {
   cat <<'HELP'
 catcopy / c
@@ -67,6 +80,12 @@ Usage:
 
   c --batch <name> --path
       Print the batch file path.
+
+Clipboard backend priority:
+  Wayland session: wl-copy
+  X11 session: xclip, then xsel
+  macOS fallback: pbcopy
+  Generic fallback: wl-copy, xclip, xsel
 
 Notes:
   File mode adds transport headers.
