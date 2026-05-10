@@ -59,6 +59,20 @@ stdin mode copies raw output without transport headers.
 
 ---
 
+## Copy while also printing to stdout
+
+    git diff | c --stdout
+
+or:
+
+    c --stdout -- jq '.' data.json
+
+`--stdout` copies the captured payload to the clipboard and also prints the same payload to stdout.
+
+Status messages are written to stderr when `--stdout` is enabled, so stdout remains usable for pipelines and logs.
+
+---
+
 ## Copy command output directly
 
     c -- git status --porcelain=v1 --branch
@@ -151,7 +165,7 @@ Example:
 
 catcopy chooses clipboard backends deterministically.
 
-Priority order:
+Default auto-detection priority order:
 
 - Wayland session:
   - `wl-copy`
@@ -172,6 +186,20 @@ The active environment is detected using:
 
 - `WAYLAND_DISPLAY`
 - `DISPLAY`
+
+Backends can also be selected explicitly:
+
+    c --backend xclip README.md
+
+    c --backend wl-copy README.md
+
+    c --backend pbcopy README.md
+Supported explicit backend names:
+
+- `auto`- `wl-copy`
+- `xclip`
+- `xsel`
+- `pbcopy`
 
 ---
 
@@ -269,6 +297,12 @@ or:
 ## JSON extraction
 
     c -- jq '.items[] | .name' data.json
+
+---
+
+## Copy and print command output
+
+    c --stdout -- jq '.' data.json
 
 ---
 

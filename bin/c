@@ -2,28 +2,152 @@
 set -euo pipefail
 
 STATE_DIR="${TMPDIR:-/tmp}/catcopy-${USER:-user}"
+BACKEND="auto"
+STDOUT_ENABLED=0
+SHOW_BACKENDS=0
+DEFAULT_PRIORITY="wl-copy,xclip,xsel,pbcopy"
+CATCOPY_PRIORITY="${CATCOPY_PRIORITY:-$DEFAULT_PRIORITY}"
+
+log_message() {
+  if [[ "$STDOUT_ENABLED" -eq 1 ]]; then
+    echo "$*" >&2
+  else
+    echo "$*"
+  fi
+}
+
+backend_available() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+backend_command() {
+  case "$1" in
+    wl-copy)
+      wl-copy
+      ;;
+    xclip)
+      xclip -selection clipboard
+      ;;
+    xsel)
+      xsel --clipboard --input
+      ;;
+    pbcopy)
+      pbcopy
+      ;;
+    *)
+      echo "ERROR: unsupported clipboard backend: $1" >&2
+      echo "Supported backends: auto, wl-copy, xclip, xsel, pbcopy" >&2
+      exit 1
+      ;;
+  esac
+}
+
+backend_allowed_by_environment() {
+  local backend="$1"
+
+  case "$backend" in
+    wl-copy)
+      [[ -n "${WAYLAND_DISPLAY:-}" ]] || [[ -z "${DISPLAY:-}" ]]
+      ;;
+    xclip|xsel)
+      [[ -n "${DISPLAY:-}" ]]
+      ;;
+    pbcopy)
+      true
+      ;;
+    *)
+      false
+      ;;
+  esac
+}
+
+select_auto_backend() {
+  local priority="${CATCOPY_PRIORITY:-$DEFAULT_PRIORITY}"
+  local backend
+
+  IFS=',' read -ra backends <<< "$priority"
+
+  for backend in "${backends[@]}"; do
+    backend="${backend//[[:space:]]/}"
+
+    [[ -n "$backend" ]] || continue
+
+    case "$backend" in
+      wl-copy|xclip|xsel|pbcopy)
+        ;;
+      *)
+        echo "ERROR: unsupported backend in CATCOPY_PRIORITY: $backend" >&2
+        echo "Supported backends: wl-copy, xclip, xsel, pbcopy" >&2
+        exit 1
+        ;;
+    esac
+
+    if backend_allowed_by_environment "$backend" && backend_available "$backend"; then
+      echo "$backend"
+      return 0
+    fi
+  done
+
+  echo "ERROR: no supported clipboard backend found." >&2
+  echo "Install one of: wl-clipboard, xclip, xsel." >&2
+  echo "Detected DISPLAY=${DISPLAY:-unset}, WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}" >&2
+  echo "CATCOPY_PRIORITY=${CATCOPY_PRIORITY:-unset}" >&2
+  exit 1
+}
 
 clipboard_copy() {
-  if [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wl-copy >/dev/null 2>&1; then
-    wl-copy
-  elif [[ -n "${DISPLAY:-}" ]] && command -v xclip >/dev/null 2>&1; then
-    xclip -selection clipboard
-  elif [[ -n "${DISPLAY:-}" ]] && command -v xsel >/dev/null 2>&1; then
-    xsel --clipboard --input
-  elif command -v pbcopy >/dev/null 2>&1; then
-    pbcopy
-  elif command -v wl-copy >/dev/null 2>&1; then
-    wl-copy
-  elif command -v xclip >/dev/null 2>&1; then
-    xclip -selection clipboard
-  elif command -v xsel >/dev/null 2>&1; then
-    xsel --clipboard --input
-  else
-    echo "ERROR: no supported clipboard backend found." >&2
-    echo "Install one of: wl-clipboard, xclip, xsel." >&2
-    echo "Detected DISPLAY=${DISPLAY:-unset}, WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}" >&2
+  local selected="$BACKEND"
+
+  if [[ "$selected" == "auto" ]]; then
+    selected="$(select_auto_backend)"
+  fi
+
+  if ! backend_available "$selected"; then
+    echo "ERROR: backend not found: $selected" >&2
     exit 1
   fi
+
+  backend_command "$selected"
+}
+
+copy_payload_file() {
+  local payload="$1"
+
+  clipboard_copy < "$payload"
+
+  if [[ "$STDOUT_ENABLED" -eq 1 ]]; then
+    cat "$payload"
+  fi
+}
+
+show_backends() {
+  local selected="unavailable"
+
+  if selected="$(select_auto_backend 2>/dev/null)"; then
+    :
+  else
+    selected="unavailable"
+  fi
+
+  cat <<INFO
+catcopy backend report
+
+Environment:
+  WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}
+  DISPLAY=${DISPLAY:-unset}
+
+Priority:
+  CATCOPY_PRIORITY=${CATCOPY_PRIORITY:-$DEFAULT_PRIORITY}
+
+Detected backends:
+  wl-copy: $(backend_available wl-copy && echo available || echo unavailable)
+  xclip:   $(backend_available xclip && echo available || echo unavailable)
+  xsel:    $(backend_available xsel && echo available || echo unavailable)
+  pbcopy:  $(backend_available pbcopy && echo available || echo unavailable)
+
+Selected auto backend:
+  $selected
+INFO
 }
 
 clean_terminal_output() {
@@ -59,33 +183,60 @@ Purpose:
   Copy files, stdin, command output, or grouped command batches to clipboard.
 
 Usage:
-  c <file> [file2 ...]
+  c [options] <file> [file2 ...]
       Copy one or more files with transport headers.
 
-  command | c
+  command | c [options]
       Copy stdin directly to clipboard.
 
-  c -- <command> [args ...]
+  c [options] -- <command> [args ...]
       Run command and copy stdout to clipboard.
 
-  c --batch <name> --clear
+  c [options] --batch <name> --clear
       Clear a named batch.
 
-  c --batch <name> -- <command> [args ...]
+  c [options] --batch <name> -- <command> [args ...]
       Run command, append cleaned stdout+stderr to the named batch,
       and copy the entire batch to clipboard.
 
-  c --batch <name> --show
+  c [options] --batch <name> --show
       Copy the current batch contents to clipboard.
 
   c --batch <name> --path
       Print the batch file path.
 
-Clipboard backend priority:
-  Wayland session: wl-copy
-  X11 session: xclip, then xsel
-  macOS fallback: pbcopy
-  Generic fallback: wl-copy, xclip, xsel
+Options:
+  --stdout
+      Copy to clipboard and also print the captured payload to stdout.
+
+  --backends
+      Show detected clipboard backends, environment variables, priority order,
+      and selected auto backend.
+
+  --backend <name>
+      Select clipboard backend explicitly.
+
+      Supported backends:
+        auto
+        wl-copy
+        xclip
+        xsel
+        pbcopy
+
+Environment:
+  CATCOPY_PRIORITY
+      Optional comma-separated auto backend priority override.
+
+      Example:
+        CATCOPY_PRIORITY=xsel,xclip,wl-copy,pbcopy c README.md
+
+Clipboard backend priority in auto mode:
+  Default priority: wl-copy, xclip, xsel, pbcopy
+
+  Environment gating:
+    wl-copy is allowed when WAYLAND_DISPLAY is set, or when DISPLAY is unset.
+    xclip and xsel require DISPLAY.
+    pbcopy is allowed as a fallback when available.
 
 Notes:
   File mode adds transport headers.
@@ -95,10 +246,16 @@ HELP
 }
 
 copy_files() {
+  mkdir -p "$STATE_DIR"
+
+  local tmp_payload
+  tmp_payload="$(mktemp "$STATE_DIR/files.XXXXXX")"
+
   {
     for file in "$@"; do
       if [[ ! -f "$file" ]]; then
         echo "ERROR: file not found: $file" >&2
+        rm -f "$tmp_payload"
         exit 1
       fi
 
@@ -109,19 +266,38 @@ copy_files() {
       cat "$file"
       echo
     done
-  } | clipboard_copy
+  } > "$tmp_payload"
 
-  echo "Copied file(s) to clipboard: $*"
+  copy_payload_file "$tmp_payload"
+  rm -f "$tmp_payload"
+
+  log_message "Copied file(s) to clipboard: $*"
 }
 
 copy_stdin() {
-  cat | clipboard_copy
-  echo "Copied stdin to clipboard"
+  mkdir -p "$STATE_DIR"
+
+  local tmp_payload
+  tmp_payload="$(mktemp "$STATE_DIR/stdin.XXXXXX")"
+
+  cat > "$tmp_payload"
+  copy_payload_file "$tmp_payload"
+  rm -f "$tmp_payload"
+
+  log_message "Copied stdin to clipboard"
 }
 
 copy_command() {
-  "$@" | clipboard_copy
-  echo "Copied command output to clipboard: $*"
+  mkdir -p "$STATE_DIR"
+
+  local tmp_payload
+  tmp_payload="$(mktemp "$STATE_DIR/command.XXXXXX")"
+
+  "$@" > "$tmp_payload"
+  copy_payload_file "$tmp_payload"
+  rm -f "$tmp_payload"
+
+  log_message "Copied command output to clipboard: $*"
 }
 
 batch_path() {
@@ -143,8 +319,8 @@ batch_clear() {
   path="$(batch_path "$name")"
 
   : > "$path"
-  echo "Cleared batch: $name"
-  echo "Path: $path"
+  log_message "Cleared batch: $name"
+  log_message "Path: $path"
 }
 
 batch_show() {
@@ -157,8 +333,8 @@ batch_show() {
     exit 1
   fi
 
-  cat "$path" | clipboard_copy
-  echo "Copied batch to clipboard: $name"
+  copy_payload_file "$path"
+  log_message "Copied batch to clipboard: $name"
 }
 
 batch_command() {
@@ -187,10 +363,10 @@ batch_command() {
 
   rm -f "$tmp_output"
 
-  cat "$path" | clipboard_copy
+  copy_payload_file "$path"
 
-  echo "Appended command output to batch: $name"
-  echo "Copied full batch to clipboard: $path"
+  log_message "Appended command output to batch: $name"
+  log_message "Copied full batch to clipboard: $path"
 
   return "$status"
 }
@@ -229,7 +405,45 @@ handle_batch() {
   esac
 }
 
+parse_global_options() {
+  while [[ $# -gt 0 ]]; do
+    case "${1:-}" in
+      --stdout)
+        STDOUT_ENABLED=1
+        shift
+        ;;
+      --backends)
+        SHOW_BACKENDS=1
+        shift
+        ;;
+      --backend)
+        shift
+        if [[ $# -eq 0 ]]; then
+          echo "ERROR: missing backend name after --backend" >&2
+          exit 1
+        fi
+        BACKEND="$1"
+        shift
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  MAIN_ARGS=("$@")
+}
+
 main() {
+  declare -a MAIN_ARGS
+  parse_global_options "$@"
+  set -- "${MAIN_ARGS[@]}"
+
+  if [[ "$SHOW_BACKENDS" -eq 1 ]]; then
+    show_backends
+    exit 0
+  fi
+
   if [[ $# -eq 0 ]]; then
     if [[ -t 0 ]]; then
       show_help >&2
