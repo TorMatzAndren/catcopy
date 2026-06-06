@@ -1,104 +1,186 @@
 # catcopy
 
-catcopy is a developer-focused clipboard pipeline tool for terminal workflows.
+catcopy (`c`) is a developer-focused text transport utility for terminal workflows.
 
-It installs two commands:
+It captures text payloads from files, stdin, commands, and command batches, then sends those payloads to a useful destination.
+
+catcopy installs two commands:
 
 - `c`
 - `catcopy`
 
-Both do the same thing.
-
-catcopy is designed for workflows involving:
-
-- debugging
-- Git inspection
-- JSON analysis
-- command pipelines
-- LLM prompting
-- multi-file review
-- terminal diagnostics
-- copy/paste-heavy development workflows
-
-Instead of repeatedly selecting terminal output manually, catcopy lets you push files, command output, and grouped diagnostic sessions directly into the clipboard.
+Both commands are identical.
 
 ---
 
-# Features
+# Core Concept
 
-## Copy files directly to clipboard
+catcopy separates:
 
-    c file1.py file2.md
+- Sources
+- Destinations
 
-Files are copied with deterministic transport headers:
+A source produces text.
+
+A destination receives text.
+
+Examples:
+
+    file → clipboard
+
+    command → clipboard
+
+    stdin → stdout
+
+    file → remote clipboard
+
+    batch → remote clipboard
+
+This makes catcopy useful for:
+
+- LLM workflows
+- debugging
+- Git review
+- diagnostics
+- documentation
+- JSON inspection
+- remote administration
+- copy/paste-heavy development
+
+---
+
+# Sources
+
+## Files
+
+Copy one or more files with transport headers:
+
+    c README.md
+
+    c script.py notes.md
+
+File mode preserves boundaries using transport headers:
 
     ===== TRANSPORT HEADER (NOT PART OF FILE) =====
-    PATH: file1.py
+    PATH: README.md
     NOTE: Do NOT include this header in any saved documents.
     ===============================================
 
-This preserves file boundaries during:
+Transport headers are intended for:
 
-- ChatGPT workflows
+- LLM workflows
 - code review
 - debugging
-- archival
 - multi-file sharing
 
 ---
 
-## Copy stdin directly
+## Stdin
+
+Capture stdin directly:
 
     echo "hello world" | c
 
-or:
-
     git diff | c
 
-stdin mode copies raw output without transport headers.
+Stdin mode copies raw input without transport headers.
 
 ---
 
-## Copy while also printing to stdout
+## Commands
 
-    git diff | c --stdout
+Run a command and capture stdout:
 
-or:
-
-    c --stdout -- jq '.' data.json
-
-`--stdout` copies the captured payload to the clipboard and also prints the same payload to stdout.
-
-Status messages are written to stderr when `--stdout` is enabled, so stdout remains usable for pipelines and logs.
-
----
-
-## Copy command output directly
-
-    c -- git status --porcelain=v1 --branch
-
-Examples:
+    c -- git status
 
     c -- jq '.' data.json
 
-    c -- sed -n '1,120p' script.py
-
-    c -- bash -c "sed -n '1,120p' a.py; sed -n '200,260p' a.py"
+    c -- hostnamectl
 
 This is useful for:
 
 - diagnostics
 - JSON inspection
 - Git review
-- LLM prompts
-- partial-file extraction
-- command snapshots
+- system snapshots
+
+---
+
+# Destinations
+
+## Automatic Destination (Default)
+
+Default mode behaves as follows:
+
+- clipboard when available
+- stdout when no clipboard is available
+
+Examples:
+
+    c README.md
+
+    git diff | c
+
+This allows catcopy to work in both desktop and headless environments.
+
+---
+
+## Stdout
+
+Force stdout output:
+
+    c --stdout README.md
+
+    c --stdout -- hostnamectl
+
+This never touches the clipboard.
+
+Useful for:
+
+- SSH sessions
+- pipes
+- scripting
+- CI environments
+
+---
+
+## Local Clipboard
+
+Force local clipboard usage:
+
+    c --clipboard README.md
+
+    c --clipboard -- hostnamectl
+
+If no clipboard backend is available, catcopy exits with an error.
+
+---
+
+## Remote Clipboard
+
+Send a payload to another machine and copy it there:
+
+    c --to turbopi README.md
+
+    c --to 100.87.218.21 -- hostnamectl
+
+Remote mode transfers payloads over SSH.
+
+The destination machine must:
+
+- be reachable through SSH
+- have catcopy installed
+- have a usable clipboard backend
+
+Localhost is detected automatically and handled without SSH:
+
+    c --to localhost README.md
 
 ---
 
 # Batch Mode
 
-Batch mode accumulates multiple commands into a single clipboard capture.
+Batch mode accumulates multiple command captures into a single payload.
 
 Clear batch:
 
@@ -112,17 +194,21 @@ Append commands:
 
     c --batch debug -- jq '.' config.json
 
-Copy full batch:
+Show batch:
 
     c --batch debug --show
 
-Each batch section records:
+Print batch path:
 
-- executed command
+    c --batch debug --path
+
+Each batch records:
+
+- command
 - exit status
 - cleaned output
 
-Example structure:
+Example:
 
     ===== COMMAND =====
     git status
@@ -132,118 +218,73 @@ Example structure:
 
     ===== OUTPUT =====
     On branch main
-    nothing to commit
 
 ---
 
-# ANSI / Interactive CLI Cleanup
+# ANSI Cleanup
 
-Some CLI tools generate terminal-specific formatting:
+Batch mode automatically removes common terminal formatting:
 
-- ANSI escapes
+- ANSI escape sequences
 - progress bars
 - spinners
-- carriage-return rewriting
-- interactive wrapping
+- carriage-return updates
 
-catcopy batch mode automatically removes most terminal control sequences.
-
-This is especially useful for:
+Useful for:
 
 - Ollama
-- progress-heavy tools
 - long-running diagnostics
-- captured terminal sessions
+- terminal captures
+- interactive tools
 
 Example:
 
-    c --batch llm -- ollama run --nowordwrap qwen3:8b "Explain this code"
+    c --batch llm -- ollama run qwen3:8b "Explain this code"
 
 ---
 
-# Clipboard Backend Detection
+# Clipboard Backends
 
-catcopy chooses clipboard backends deterministically.
+catcopy supports:
 
-Default auto-detection priority order:
+- wl-copy
+- xclip
+- xsel
+- pbcopy
 
-- Wayland session:
-  - `wl-copy`
+Display detected backends:
 
-- X11 session:
-  - `xclip`
-  - `xsel`
+    c --backends
 
-- macOS support when available:
-  - `pbcopy`
-
-- Fallback probing order:
-  - `wl-copy`
-  - `xclip`
-  - `xsel`
-
-The active environment is detected using:
-
-- `WAYLAND_DISPLAY`
-- `DISPLAY`
-
-Backends can also be selected explicitly:
+Select a backend explicitly:
 
     c --backend xclip README.md
 
     c --backend wl-copy README.md
 
-    c --backend pbcopy README.md
-Supported explicit backend names:
+Override auto-selection priority:
 
-- `auto`- `wl-copy`
-- `xclip`
-- `xsel`
-- `pbcopy`
+    CATCOPY_PRIORITY=xsel,xclip,wl-copy,pbcopy c README.md
 
 ---
 
-# Requirements
+# Environment Variables
 
-One clipboard backend is required.
+Remote clipboard defaults:
 
-## X11
+    C_REMOTE_DISPLAY=:0.0
 
-Install either:
+    C_REMOTE_SESSION=x11
 
-    sudo apt install xclip
+Override when necessary:
 
-or:
-
-    sudo apt install xsel
-
-## Wayland
-
-    sudo apt install wl-clipboard
+    C_REMOTE_DISPLAY=:1 c --to workstation README.md
 
 ---
 
-# Tested Platforms
+# Installation
 
-Currently verified locally on:
-
-- Linux/X11 with `xclip`
-
-Routing logic verified through mocked backend testing for:
-
-- Wayland (`wl-copy`)
-- X11 fallback (`xsel`)
-
-Implemented but not yet personally verified on real systems:
-
-- native Wayland desktop session
-- macOS (`pbcopy`)
-
-Native Windows clipboard support is not implemented yet.
-
----
-
-# Install From Source
+Install from source:
 
     sudo ./install.sh
 
@@ -254,112 +295,72 @@ Installed commands:
 
 ---
 
+# Build Debian Package
+
+Build:
+
+    ./build-deb.sh
+
+Install:
+
+    sudo apt install ./dist/catcopy_0.1.0_all.deb
+
+---
+
 # Uninstall
 
     sudo ./uninstall.sh
 
 ---
 
-# Build Debian Package
+# Examples
 
-    ./build-deb.sh
+Copy files:
 
-Install package:
+    c README.md script.py
 
-    sudo apt install ./dist/catcopy_0.1.0_all.deb
+Capture command output:
 
----
+    c -- git status --porcelain=v1 --branch
 
-# Usage
-
-Show help:
-
-    c --help
-
-or:
-
-    catcopy --help
-
----
-
-# Real-World Examples
-
-## Git review snapshot
-
-    (
-      git status
-      echo
-      git diff --stat
-    ) | c
-
----
-
-## JSON extraction
+Copy JSON extraction:
 
     c -- jq '.items[] | .name' data.json
 
----
+Remote clipboard transport:
 
-## Copy and print command output
+    c --to turbopi README.md
 
-    c --stdout -- jq '.' data.json
+Remote diagnostics:
 
----
+    c --to 100.87.218.21 -- hostnamectl
 
-## Multi-range file extraction
+Headless output:
 
-    c -- bash -c "
-    sed -n '1,120p' app.py
-    sed -n '200,260p' app.py
-    "
-
----
-
-## LLM workflow
-
-    c README.md script.py notes.md
-
-Paste directly into ChatGPT or another LLM.
-
----
-
-# Why not just xclip?
-
-`xclip`, `xsel`, and `wl-copy` are excellent low-level clipboard tools.
-
-catcopy focuses on higher-level developer workflows:
-
-- copying multiple files with preserved boundaries
-- direct command-output capture
-- grouped diagnostic batches
-- ANSI cleanup for interactive tools
-- deterministic clipboard backend selection
-- transport-safe copy/paste into chats and LLM workflows
-
-catcopy uses existing clipboard tools underneath rather than replacing them.
+    c --stdout README.md
 
 ---
 
 # Design Philosophy
 
-catcopy does not try to reinterpret command output.
+catcopy does not attempt to interpret or modify payload content.
 
-Instead it focuses on:
+Its purpose is to provide:
 
 - deterministic capture
 - explicit transport boundaries
 - minimal workflow friction
 - terminal interoperability
-- preserving command intent
-- reducing repetitive manual selection
+- reliable clipboard transport
+- reliable remote transport
 
 If output is malformed, the preferred fix is usually:
 
-- adjusting the command itself
-- disabling terminal formatting
-- using cleaner CLI flags
+- adjusting the command
+- disabling formatting at the source
+- using cleaner CLI options
 
-rather than mutating output aggressively inside catcopy.
+rather than mutating payloads aggressively inside catcopy.
 
 ---
 
@@ -371,24 +372,7 @@ catcopy is not:
 - a shell replacement
 - a terminal multiplexer
 
-It is a developer-focused clipboard capture utility for terminal workflows.
-
----
-
-# Transparency
-
-The implementation used significant ChatGPT assistance during development.
-
-However:
-
-- the workflow design
-- command structure
-- feature direction
-- iterative refinement
-- testing
-- operational philosophy
-
-were manually driven and reviewed.
+catcopy is a text transport utility for terminal workflows.
 
 ---
 
@@ -399,5 +383,7 @@ MIT
 # Author
 
 Tor Matz Andrén
-http://jarri.systems
-http://www.gbsproductions.se
+
+https://jarri.systems
+
+https://www.gbsproductions.se

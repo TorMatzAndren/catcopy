@@ -2,14 +2,20 @@
 set -euo pipefail
 
 STATE_DIR="${TMPDIR:-/tmp}/catcopy-${USER:-user}"
+
 BACKEND="auto"
-STDOUT_ENABLED=0
+DESTINATION="auto"
+REMOTE_HOST=""
 SHOW_BACKENDS=0
+
 DEFAULT_PRIORITY="wl-copy,xclip,xsel,pbcopy"
 CATCOPY_PRIORITY="${CATCOPY_PRIORITY:-$DEFAULT_PRIORITY}"
 
+DEFAULT_REMOTE_DISPLAY="${C_REMOTE_DISPLAY:-:0.0}"
+DEFAULT_REMOTE_SESSION="${C_REMOTE_SESSION:-x11}"
+
 log_message() {
-  if [[ "$STDOUT_ENABLED" -eq 1 ]]; then
+  if [[ "$DESTINATION" == "stdout" ]]; then
     echo "$*" >&2
   else
     echo "$*"
@@ -20,13 +26,34 @@ backend_available() {
   command -v "$1" >/dev/null 2>&1
 }
 
+backend_allowed_by_environment() {
+  local backend="$1"
+
+  case "$backend" in
+    wl-copy)
+      [[ -n "${WAYLAND_DISPLAY:-}" ]]
+      ;;
+    xclip|xsel)
+      [[ -n "${DISPLAY:-}" ]]
+      ;;
+    pbcopy)
+      true
+      ;;
+    *)
+      false
+      ;;
+  esac
+}
+
 backend_command() {
   case "$1" in
     wl-copy)
       wl-copy
       ;;
     xclip)
-      xclip -selection clipboard
+      pkill -f "^catcopy-xclip$" 2>/dev/null || true
+      sleep 0.05
+      exec -a catcopy-xclip xclip -selection clipboard
       ;;
     xsel)
       xsel --clipboard --input
@@ -42,25 +69,6 @@ backend_command() {
   esac
 }
 
-backend_allowed_by_environment() {
-  local backend="$1"
-
-  case "$backend" in
-    wl-copy)
-      [[ -n "${WAYLAND_DISPLAY:-}" ]] || [[ -z "${DISPLAY:-}" ]]
-      ;;
-    xclip|xsel)
-      [[ -n "${DISPLAY:-}" ]]
-      ;;
-    pbcopy)
-      true
-      ;;
-    *)
-      false
-      ;;
-  esac
-}
-
 select_auto_backend() {
   local priority="${CATCOPY_PRIORITY:-$DEFAULT_PRIORITY}"
   local backend
@@ -69,7 +77,6 @@ select_auto_backend() {
 
   for backend in "${backends[@]}"; do
     backend="${backend//[[:space:]]/}"
-
     [[ -n "$backend" ]] || continue
 
     case "$backend" in
@@ -88,18 +95,20 @@ select_auto_backend() {
     fi
   done
 
-  echo "ERROR: no supported clipboard backend found." >&2
-  echo "Install one of: wl-clipboard, xclip, xsel." >&2
-  echo "Detected DISPLAY=${DISPLAY:-unset}, WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}" >&2
-  echo "CATCOPY_PRIORITY=${CATCOPY_PRIORITY:-unset}" >&2
-  exit 1
+  return 1
 }
 
 clipboard_copy() {
   local selected="$BACKEND"
 
   if [[ "$selected" == "auto" ]]; then
-    selected="$(select_auto_backend)"
+    if ! selected="$(select_auto_backend)"; then
+      echo "ERROR: no supported clipboard backend found." >&2
+      echo "Use --stdout for terminal output, or install/configure a clipboard backend." >&2
+      echo "Detected DISPLAY=${DISPLAY:-unset}, WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}" >&2
+      echo "CATCOPY_PRIORITY=${CATCOPY_PRIORITY:-unset}" >&2
+      exit 1
+    fi
   fi
 
   if ! backend_available "$selected"; then
@@ -107,17 +116,60 @@ clipboard_copy() {
     exit 1
   fi
 
+  if ! backend_allowed_by_environment "$selected"; then
+    echo "ERROR: backend not usable in this environment: $selected" >&2
+    echo "Detected DISPLAY=${DISPLAY:-unset}, WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}" >&2
+    exit 1
+  fi
+
   backend_command "$selected"
+}
+
+is_local_target() {
+  local host="$1"
+
+  [[ "$host" == "localhost" || "$host" == "127.0.0.1" || "$host" == "$(hostname)" ]]
 }
 
 copy_payload_file() {
   local payload="$1"
 
-  clipboard_copy < "$payload"
+  case "$DESTINATION" in
+    stdout)
+      cat "$payload"
+      ;;
+    clipboard)
+      clipboard_copy < "$payload"
+      log_message "Copied to clipboard"
+      ;;
+    remote)
+      if [[ -z "$REMOTE_HOST" ]]; then
+        echo "ERROR: remote destination selected without host" >&2
+        exit 1
+      fi
 
-  if [[ "$STDOUT_ENABLED" -eq 1 ]]; then
-    cat "$payload"
-  fi
+      if is_local_target "$REMOTE_HOST"; then
+        clipboard_copy < "$payload"
+        log_message "Copied to local clipboard: $REMOTE_HOST"
+      else
+        ssh -o BatchMode=yes "$REMOTE_HOST" \
+          "DISPLAY=${DEFAULT_REMOTE_DISPLAY} XDG_SESSION_TYPE=${DEFAULT_REMOTE_SESSION} c --clipboard" < "$payload"
+        log_message "Copied to remote clipboard: $REMOTE_HOST"
+      fi
+      ;;
+    auto)
+      if select_auto_backend >/dev/null 2>&1; then
+        clipboard_copy < "$payload"
+        log_message "Copied to clipboard"
+      else
+        cat "$payload"
+      fi
+      ;;
+    *)
+      echo "ERROR: unknown destination: $DESTINATION" >&2
+      exit 1
+      ;;
+  esac
 }
 
 show_backends() {
@@ -135,6 +187,7 @@ catcopy backend report
 Environment:
   WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}
   DISPLAY=${DISPLAY:-unset}
+  XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-unset}
 
 Priority:
   CATCOPY_PRIORITY=${CATCOPY_PRIORITY:-$DEFAULT_PRIORITY}
@@ -147,6 +200,10 @@ Detected backends:
 
 Selected auto backend:
   $selected
+
+Remote defaults:
+  C_REMOTE_DISPLAY=${DEFAULT_REMOTE_DISPLAY}
+  C_REMOTE_SESSION=${DEFAULT_REMOTE_SESSION}
 INFO
 }
 
@@ -180,38 +237,66 @@ show_help() {
 catcopy / c
 
 Purpose:
-  Copy files, stdin, command output, or grouped command batches to clipboard.
+  Capture text payloads from files, stdin, commands, or command batches
+  and send them to a useful destination.
 
-Usage:
-  c [options] <file> [file2 ...]
-      Copy one or more files with transport headers.
+Sources:
+  c <file> [file2 ...]
+      Capture one or more files with transport headers.
 
-  command | c [options]
-      Copy stdin directly to clipboard.
+  command | c
+      Capture stdin directly.
 
-  c [options] -- <command> [args ...]
-      Run command and copy stdout to clipboard.
+  c -- <command> [args ...]
+      Run command and capture stdout raw.
 
-  c [options] --batch <name> --clear
+Destinations:
+  default
+      Copy to local clipboard when available.
+      If no clipboard is available, print to stdout.
+
+  --stdout
+      Print captured payload to stdout only.
+
+  --clipboard
+      Force local clipboard. Error if unavailable.
+
+  --to HOST
+      Send captured payload to HOST over SSH and copy there.
+
+Examples:
+  c README.md
+
+  git diff | c
+
+  c -- jq '.' data.json
+
+  c --stdout README.md
+
+  c --clipboard README.md
+
+  c --to turbopi README.md
+
+  c --to 100.87.218.21 -- hostnamectl
+
+Batch mode:
+  c --batch <name> --clear
       Clear a named batch.
 
-  c [options] --batch <name> -- <command> [args ...]
+  c --batch <name> -- <command> [args ...]
       Run command, append cleaned stdout+stderr to the named batch,
-      and copy the entire batch to clipboard.
+      and copy/send the entire batch.
 
-  c [options] --batch <name> --show
-      Copy the current batch contents to clipboard.
+  c --batch <name> --show
+      Copy/send the current batch contents.
 
   c --batch <name> --path
       Print the batch file path.
 
 Options:
-  --stdout
-      Copy to clipboard and also print the captured payload to stdout.
-
   --backends
       Show detected clipboard backends, environment variables, priority order,
-      and selected auto backend.
+      selected auto backend, and remote defaults.
 
   --backend <name>
       Select clipboard backend explicitly.
@@ -230,18 +315,19 @@ Environment:
       Example:
         CATCOPY_PRIORITY=xsel,xclip,wl-copy,pbcopy c README.md
 
-Clipboard backend priority in auto mode:
-  Default priority: wl-copy, xclip, xsel, pbcopy
+  C_REMOTE_DISPLAY
+      Display used when copying to a remote X11 clipboard.
+      Default: :0.0
 
-  Environment gating:
-    wl-copy is allowed when WAYLAND_DISPLAY is set, or when DISPLAY is unset.
-    xclip and xsel require DISPLAY.
-    pbcopy is allowed as a fallback when available.
+  C_REMOTE_SESSION
+      XDG_SESSION_TYPE used for remote copy.
+      Default: x11
 
 Notes:
   File mode adds transport headers.
-  Stdin and normal command mode copy raw output.
+  Stdin and normal command mode capture raw output.
   Batch mode removes common ANSI terminal control sequences.
+  Remote mode requires SSH access to HOST and a working catcopy install there.
 HELP
 }
 
@@ -271,7 +357,7 @@ copy_files() {
   copy_payload_file "$tmp_payload"
   rm -f "$tmp_payload"
 
-  log_message "Copied file(s) to clipboard: $*"
+  log_message "Captured file(s): $*"
 }
 
 copy_stdin() {
@@ -284,7 +370,7 @@ copy_stdin() {
   copy_payload_file "$tmp_payload"
   rm -f "$tmp_payload"
 
-  log_message "Copied stdin to clipboard"
+  log_message "Captured stdin"
 }
 
 copy_command() {
@@ -297,7 +383,7 @@ copy_command() {
   copy_payload_file "$tmp_payload"
   rm -f "$tmp_payload"
 
-  log_message "Copied command output to clipboard: $*"
+  log_message "Captured command output: $*"
 }
 
 batch_path() {
@@ -334,7 +420,7 @@ batch_show() {
   fi
 
   copy_payload_file "$path"
-  log_message "Copied batch to clipboard: $name"
+  log_message "Captured batch: $name"
 }
 
 batch_command() {
@@ -366,7 +452,7 @@ batch_command() {
   copy_payload_file "$path"
 
   log_message "Appended command output to batch: $name"
-  log_message "Copied full batch to clipboard: $path"
+  log_message "Captured full batch: $path"
 
   return "$status"
 }
@@ -409,7 +495,21 @@ parse_global_options() {
   while [[ $# -gt 0 ]]; do
     case "${1:-}" in
       --stdout)
-        STDOUT_ENABLED=1
+        DESTINATION="stdout"
+        shift
+        ;;
+      --clipboard)
+        DESTINATION="clipboard"
+        shift
+        ;;
+      --to)
+        shift
+        if [[ $# -eq 0 ]]; then
+          echo "ERROR: missing host after --to" >&2
+          exit 1
+        fi
+        DESTINATION="remote"
+        REMOTE_HOST="$1"
         shift
         ;;
       --backends)
