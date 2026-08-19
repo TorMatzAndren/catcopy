@@ -53,7 +53,7 @@ backend_command() {
     xclip)
       pkill -f "^catcopy-xclip$" 2>/dev/null || true
       sleep 0.05
-      exec -a catcopy-xclip xclip -selection clipboard
+      exec -a catcopy-xclip xclip -selection clipboard >/dev/null 2>&1
       ;;
     xsel)
       xsel --clipboard --input
