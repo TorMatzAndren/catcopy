@@ -247,6 +247,12 @@ Sources:
   command | c
       Capture stdin directly.
 
+  command | tee >(c)
+      Print stdout normally and copy the same stream.
+
+  command 2>&1 | tee >(c)
+      Print and copy combined stdout+stderr.
+
   c -- <command> [args ...]
       Run command and capture stdout raw.
 

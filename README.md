@@ -85,6 +85,20 @@ Capture stdin directly:
 
 Stdin mode copies raw input without transport headers.
 
+To keep command output visible in the terminal while also copying it, compose
+catcopy with `tee`:
+
+    git diff | tee >(c)
+
+To include both stdout and stderr:
+
+    command 2>&1 | tee >(c)
+
+Here `tee` preserves the normal terminal stream while process substitution sends
+the same captured stream to catcopy. This is useful for diagnostics and
+copy/paste-heavy development sessions where the terminal output and clipboard
+capture should contain the same evidence.
+
 ---
 
 ## Commands
