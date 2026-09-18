@@ -1,15 +1,29 @@
-# catcopy
+# catcopy — copy files and command output to the clipboard from Linux
 
-catcopy (`c`) is a developer-focused text transport utility for terminal workflows.
+**catcopy** (`c`) is a Linux command-line clipboard tool for copying multiple files, stdin, command output, and command batches while preserving useful source boundaries.
 
-It captures text payloads from files, stdin, commands, and command batches, then sends those payloads to a useful destination.
+Use it to copy files or terminal output directly to the clipboard:
 
-catcopy installs two commands:
+    c README.md script.py
+    git diff | c
+    c -- git status
+    echo "hello world" | c
+
+When copying multiple files, catcopy keeps each file identifiable with transport headers instead of collapsing everything into an ambiguous text blob. It can also write to stdout or send clipboard payloads to another machine over SSH.
+
+catcopy is designed for developer workflows including:
+
+- copying multiple files to the clipboard
+- copying command output from the Linux terminal
+- sending Git diffs and diagnostics to LLMs
+- preserving filenames and source boundaries
+- remote clipboard transport
+- headless and SSH workflows
+
+catcopy installs two identical commands:
 
 - `c`
 - `catcopy`
-
-Both commands are identical.
 
 ---
 
