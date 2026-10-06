@@ -270,6 +270,16 @@ Destinations:
   --to HOST
       Send captured payload to HOST over SSH and copy there.
 
+SSH directions:
+  Local source -> remote clipboard:
+      c --to HOST README.md
+
+  Remote command -> local clipboard:
+      ssh HOST 'command' 2>&1 | tee >(c)
+
+      Here c runs locally, outside ssh. The remote machine only produces
+      the command output; it does not need clipboard access or catcopy.
+
 Examples:
   c README.md
 

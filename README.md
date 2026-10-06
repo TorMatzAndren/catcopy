@@ -204,6 +204,33 @@ Localhost is detected automatically and handled without SSH:
 
     c --to localhost README.md
 
+### Remote command to local clipboard
+
+The opposite direction does not use `--to`.
+
+To run a command on another machine while copying its output to the clipboard
+of the machine where you are sitting, keep `c` outside SSH:
+
+    ssh lucy 'command' 2>&1 | tee >(c)
+
+The data path is:
+
+    remote command -> SSH -> local c -> local clipboard
+
+Here `c` runs locally. The remote machine only produces command output, so it
+does not need clipboard access or catcopy installed.
+
+By contrast:
+
+    c --to lucy README.md
+
+uses the opposite data path:
+
+    local source -> SSH -> remote c -> remote clipboard
+
+Use `--to HOST` when the destination clipboard is remote. Put `c` outside
+`ssh` when the destination clipboard is local.
+
 ---
 
 # Batch Mode
