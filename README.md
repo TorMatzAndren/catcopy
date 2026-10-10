@@ -27,6 +27,52 @@ catcopy installs two identical commands:
 
 ---
 
+## Quick Start
+
+Catcopy makes it easy to move terminal output, files, and
+diagnostics into AI conversations, bug reports, and code reviews.
+
+### Display and copy simultaneously
+
+    command 2>&1 | tee >(c)
+
+Keep output visible in the terminal while copying the same
+stdout and stderr to the clipboard.
+
+### Capture a command
+
+    c -- git status
+
+### Copy multiple files
+
+    c README.md script.py config.json
+
+File boundaries are preserved using transport headers.
+
+### Copy a Git diff
+
+    git diff | c
+
+### Capture several diagnostics
+
+    {
+      uname -a
+      free -h
+      df -h
+    } 2>&1 | tee >(c)
+
+### Send output to another machine
+
+    c --to workstation README.md
+
+Remote clipboard delivery uses SSH and requires Catcopy on
+the receiving machine.
+
+**Privacy:** Catcopy does not automatically redact secrets.
+Review captured data before sharing it externally.
+
+---
+
 # Core Concept
 
 catcopy separates:
