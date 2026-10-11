@@ -5,6 +5,7 @@ umask 077
 STATE_DIR="${TMPDIR:-/tmp}/catcopy-${USER:-user}"
 TEMP_FILES=()
 CHILD_PID=""
+RUNNER="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/catcopy-command-runner"
 
 cleanup() {
   local status=$?
@@ -20,7 +21,7 @@ handle_signal() {
   local status="$1"
   trap - HUP INT TERM
   if [[ -n "$CHILD_PID" ]]; then
-    kill -TERM -- "-$CHILD_PID" 2>/dev/null || true
+    # The runner owns subprocess-group cleanup.
     kill -TERM "$CHILD_PID" 2>/dev/null || true
     wait "$CHILD_PID" 2>/dev/null || true
     CHILD_PID=""
@@ -302,7 +303,11 @@ for line in data.split(b"\n"):
         line = line[:-1]
     elif b"\r" in line:
         line = line.split(b"\r")[-1]
-    line = re.sub("^[⠁⠂⠄⡀⢀⠠⠐⠈⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s*".encode(), b"", line)
+    spinner_chars = "⠁⠂⠄⡀⢀⠠⠐⠈⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    spinner_pattern = rb"^(?:" + b"|".join(
+        char.encode("utf-8") for char in spinner_chars
+    ) + rb")\s*"
+    line = re.sub(spinner_pattern, b"", line)
     cleaned.append(line)
 
 out = b"\n".join(cleaned)
@@ -473,10 +478,17 @@ copy_command() {
   make_temp command; tmp_payload="$REPLY"
 
   local status=0
-  setsid -- "$@" > "$tmp_payload" &
+  "$RUNNER" -- "$@" <&0 > "$tmp_payload" &
   CHILD_PID=$!
   wait "$CHILD_PID" || status=$?
   CHILD_PID=""
+
+  # A failed command with no captured output must not erase the clipboard.
+  if [[ "$status" -ne 0 && ! -s "$tmp_payload" ]]; then
+    log_message "Command failed without output (status $status); destination unchanged"
+    return "$status"
+  fi
+
   copy_payload_file "$tmp_payload"
 
   log_message "Captured command output: $*"
@@ -564,7 +576,7 @@ batch_command() {
   make_temp "${name}.clean"; tmp_clean="$REPLY"
 
   local status=0
-  TERM=dumb NO_COLOR=1 COLUMNS=100000 setsid -- "$@" > "$tmp_output" 2>&1 &
+  TERM=dumb NO_COLOR=1 COLUMNS=100000 "$RUNNER" -- "$@" <&0 > "$tmp_output" 2>&1 &
   CHILD_PID=$!
   wait "$CHILD_PID" || status=$?
   CHILD_PID=""

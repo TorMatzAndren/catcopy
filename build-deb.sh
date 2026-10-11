@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 022
 
-VERSION="${VERSION:-0.3.0}"
+VERSION="${VERSION:-0.3.1}"
 PACKAGE="catcopy"
 ARCH="all"
 
@@ -54,6 +54,9 @@ install -m755 "$SOURCE/bin/c" \
 
 install -m755 "$SOURCE/bin/catcopy" \
     "$BUILD/usr/bin/catcopy"
+
+install -m755 "$SOURCE/bin/catcopy-command-runner" \
+    "$BUILD/usr/bin/catcopy-command-runner"
 
 install -m644 "$SOURCE/README.md" \
     "$BUILD/usr/share/doc/$PACKAGE/README.md"

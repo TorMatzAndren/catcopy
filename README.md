@@ -1,3 +1,44 @@
+## Catcopy v0.3.1
+
+This maintenance release corrects regressions introduced by the
+v0.3.0 process-handling and terminal-output changes.
+
+### Corrections
+
+- Preserve UTF-8 symbols when cleaning terminal output in named batches.
+- Remove recognized Braille spinner prefixes without corrupting other text.
+- Preserve piped stdin for ordinary command and batch capture.
+- Preserve controlling-terminal access for interactive commands.
+- Restore foreground terminal ownership after normal completion,
+  SIGINT and SIGTERM.
+- Terminate command process groups when the wrapper is interrupted.
+- Avoid replacing the clipboard when a command fails without output.
+- Preserve nonempty output from commands that exit unsuccessfully.
+
+### Verification
+
+The original 30-case regression suite, five targeted regression
+checks and six integrated pseudo-terminal checks passed.
+
+Separate lifecycle audits verified descendant cleanup and foreground
+terminal restoration.
+
+Real-X11 xclip detachment remains unverified. The existing mock
+clipboard tests do not establish real-X11 detachment behavior.
+
+### Debian package
+
+The package includes the Python command runner in addition to
+the `c` and `catcopy` launchers.
+
+Build from a clean committed checkout:
+
+```bash
+./build-deb.sh
+```
+
+The resulting package is placed in `dist/`.
+
 # catcopy — copy files and command output to the clipboard from Linux
 
 **catcopy** (`c`) is a Linux command-line clipboard tool for copying multiple files, stdin, command output, and command batches while preserving useful source boundaries.

@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Execute a command with isolated process-group cleanup, retaining its session."""
+
+import os
+import signal
+import subprocess
+import sys
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if args and args[0] == "--":
+        args = args[1:]
+
+    if not args:
+        print("catcopy runner: missing command", file=sys.stderr)
+        return 2
+
+    child = None
+    tty_fd = None
+    original_foreground = None
+    transferred = False
+
+    def terminate_group():
+        if child is None:
+            return
+
+        try:
+            os.killpg(child.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+
+        try:
+            child.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.wait()
+
+    def interrupted(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, interrupted)
+
+    # Foreground handoff must not suspend the runner itself.
+    signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+
+    try:
+        # A pipe-only invocation may not have a controlling terminal.
+        # In that case, no foreground-terminal manipulation is needed.
+        try:
+            tty_fd = os.open(
+                "/dev/tty",
+                os.O_RDWR | getattr(os, "O_NOCTTY", 0),
+            )
+            original_foreground = os.tcgetpgrp(tty_fd)
+        except OSError:
+            if tty_fd is not None:
+                os.close(tty_fd)
+            tty_fd = None
+
+        # A distinct process group, but NOT a distinct session.
+        # Standard input/output/error retain the caller's redirections.
+        child = subprocess.Popen(
+            args,
+            stdin=None,
+            stdout=None,
+            stderr=None,
+            start_new_session=False,
+            process_group=0,
+        )
+
+        # Only hand over the terminal if this runner's process group
+        # currently owns it. Never steal foreground ownership from
+        # an unrelated interactive job.
+        if (
+            tty_fd is not None
+            and original_foreground == os.getpgrp()
+        ):
+            os.tcsetpgrp(tty_fd, child.pid)
+            transferred = True
+
+        result = child.wait()
+
+        if result < 0:
+            return 128 - result
+        return result
+
+    except FileNotFoundError as exc:
+        print(
+            f"catcopy runner: command not found: {exc.filename}",
+            file=sys.stderr,
+        )
+        return 127
+
+    except PermissionError as exc:
+        print(
+            f"catcopy runner: permission denied: {exc.filename}",
+            file=sys.stderr,
+        )
+        return 126
+
+    finally:
+        # Restore foreground ownership before the wrapper resumes.
+        if transferred and tty_fd is not None:
+            try:
+                os.tcsetpgrp(tty_fd, original_foreground)
+            except OSError as exc:
+                print(
+                    f"catcopy runner: terminal restoration failed: {exc}",
+                    file=sys.stderr,
+                )
+
+        if tty_fd is not None:
+            os.close(tty_fd)
+
+        if child is not None and child.poll() is None:
+            terminate_group()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
