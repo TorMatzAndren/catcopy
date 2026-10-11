@@ -66,7 +66,10 @@ File boundaries are preserved using transport headers.
     c --to workstation README.md
 
 Remote clipboard delivery uses SSH and requires Catcopy on
-the receiving machine.
+the receiving machine. `c --to HOST -- command` runs the command locally,
+then sends its captured output to HOST; it does not execute the command remotely.
+Remote clipboard setup currently supplies X11 `DISPLAY` and does not claim
+Wayland support. `C_REMOTE_SESSION` must remain `x11`.
 
 **Privacy:** Catcopy does not automatically redact secrets.
 Review captured data before sharing it externally.
@@ -308,6 +311,22 @@ Each batch records:
 - command
 - exit status
 - cleaned output
+
+Batch cleaning is intentionally lossy: ANSI control sequences are removed,
+carriage-return progress updates are reduced to their final line, and selected
+spinner prefixes/control bytes are stripped. This mode preserves non-UTF-8
+bytes, but these cleanup rules can alter payload bytes. Use raw batch mode when
+the exact command output matters:
+
+    c --batch archive --raw -- command-that-emits-binary-data
+
+Raw mode preserves command output bytes within the framed batch record.
+
+Catcopy requires its state directory to be owned by the current user with mode
+0700, batch files with mode 0600, and every ancestor directory to be non-writable
+by other UIDs or protected by the sticky bit. Unsafe pre-existing paths are
+rejected without changing them. Processes running as the same UID share the
+trust boundary and can still modify the directory concurrently outside Catcopy.
 
 Example:
 

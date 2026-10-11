@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 022
 
-VERSION="${VERSION:-0.2.0}"
+VERSION="${VERSION:-0.3.0}"
 PACKAGE="catcopy"
 ARCH="all"
 
@@ -60,14 +61,18 @@ install -m644 "$SOURCE/README.md" \
 install -m644 "$SOURCE/LICENSE" \
     "$BUILD/usr/share/doc/$PACKAGE/LICENSE"
 
+# dpkg preserves source tree modes, so normalize every package directory.
+find "$BUILD" -type d -exec chmod 755 {} +
+
 cat > "$BUILD/DEBIAN/control" <<CONTROL
 Package: catcopy
 Version: $VERSION
 Section: utils
 Priority: optional
 Architecture: $ARCH
-Depends: bash, python3, xclip | wl-clipboard | xsel
-Recommends: openssh-client
+Depends: bash, coreutils, util-linux, python3
+Recommends: xclip | wl-clipboard | xsel
+Suggests: openssh-client
 Maintainer: Jarri Systems
 Description: Clipboard transport for terminal and developer workflows
  Copy files, stdin, and command output to the clipboard.
@@ -80,6 +85,10 @@ ARTIFACT="$OUT/${PACKAGE}_${VERSION}_${ARCH}.deb"
 echo
 echo "--- BUILD PACKAGE ---"
 dpkg-deb --root-owner-group --build "$BUILD" "$ARTIFACT"
+
+echo
+echo "--- VERIFY PACKAGE PERMISSIONS ---"
+python3 "$ROOT/tests/package_permissions.py" "$ARTIFACT"
 
 echo
 echo "--- PACKAGE METADATA ---"

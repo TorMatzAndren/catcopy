@@ -1,7 +1,81 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 STATE_DIR="${TMPDIR:-/tmp}/catcopy-${USER:-user}"
+TEMP_FILES=()
+CHILD_PID=""
+
+cleanup() {
+  local status=$?
+  trap - EXIT HUP INT TERM
+  local path
+  for path in "${TEMP_FILES[@]}"; do
+    [[ -n "$path" ]] && rm -f -- "$path"
+  done
+  exit "$status"
+}
+trap cleanup EXIT
+handle_signal() {
+  local status="$1"
+  trap - HUP INT TERM
+  if [[ -n "$CHILD_PID" ]]; then
+    kill -TERM -- "-$CHILD_PID" 2>/dev/null || true
+    kill -TERM "$CHILD_PID" 2>/dev/null || true
+    wait "$CHILD_PID" 2>/dev/null || true
+    CHILD_PID=""
+  fi
+  exit "$status"
+}
+trap 'handle_signal 129' HUP
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
+
+ensure_state_dir() {
+  local uid mode owner parent leaf dir
+  uid="$(id -u)"
+  parent="$(realpath -e -- "$(dirname -- "$STATE_DIR")")" || {
+    echo "ERROR: state directory parent does not exist: $STATE_DIR" >&2; return 1;
+  }
+  leaf="$(basename -- "$STATE_DIR")"
+  STATE_DIR="$parent/$leaf"
+  dir="$parent"
+  while :; do
+    mode="$(stat -c %a -- "$dir")"
+    if (( (8#$mode & 022) != 0 && (8#$mode & 01000) == 0 )); then
+      echo "ERROR: state path has a replaceable parent directory: $dir" >&2
+      return 1
+    fi
+    [[ "$dir" == / ]] && break
+    dir="$(dirname -- "$dir")"
+  done
+  if [[ -L "$STATE_DIR" ]]; then
+    echo "ERROR: state directory must not be a symlink: $STATE_DIR" >&2
+    return 1
+  fi
+  if [[ ! -e "$STATE_DIR" ]]; then
+    mkdir -m 700 -- "$STATE_DIR" 2>/dev/null || {
+      [[ -d "$STATE_DIR" && ! -L "$STATE_DIR" ]] || return 1
+    }
+  fi
+  [[ -d "$STATE_DIR" && ! -L "$STATE_DIR" ]] || {
+    echo "ERROR: unsafe state directory: $STATE_DIR" >&2; return 1;
+  }
+  owner="$(stat -c %u -- "$STATE_DIR")"
+  mode="$(stat -c %a -- "$STATE_DIR")"
+  if [[ "$owner" != "$uid" || "$mode" != "700" ]]; then
+    echo "ERROR: state directory must be owned by uid $uid and mode 0700: $STATE_DIR" >&2
+    return 1
+  fi
+}
+
+make_temp() {
+  ensure_state_dir || return
+  local path
+  path="$(mktemp "$STATE_DIR/$1.XXXXXX")" || return
+  TEMP_FILES+=("$path")
+  REPLY="$path"
+}
 
 BACKEND="auto"
 DESTINATION="auto"
@@ -15,11 +89,7 @@ DEFAULT_REMOTE_DISPLAY="${C_REMOTE_DISPLAY:-:0.0}"
 DEFAULT_REMOTE_SESSION="${C_REMOTE_SESSION:-x11}"
 
 log_message() {
-  if [[ "$DESTINATION" == "stdout" ]]; then
-    echo "$*" >&2
-  else
-    echo "$*"
-  fi
+  echo "$*" >&2
 }
 
 backend_available() {
@@ -51,9 +121,7 @@ backend_command() {
       wl-copy
       ;;
     xclip)
-      pkill -f "^catcopy-xclip$" 2>/dev/null || true
-      sleep 0.05
-      exec -a catcopy-xclip xclip -selection clipboard >/dev/null 2>&1
+      xclip -selection clipboard
       ;;
     xsel)
       xsel --clipboard --input
@@ -152,8 +220,17 @@ copy_payload_file() {
         clipboard_copy < "$payload"
         log_message "Copied to local clipboard: $REMOTE_HOST"
       else
+        [[ "$REMOTE_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9._@:-]*$ ]] || {
+          echo "ERROR: invalid SSH host: $REMOTE_HOST" >&2; return 1;
+        }
+        [[ "$DEFAULT_REMOTE_DISPLAY" =~ ^:[0-9]+(\.[0-9]+)?$ ]] || {
+          echo "ERROR: invalid remote X11 display: $DEFAULT_REMOTE_DISPLAY" >&2; return 1;
+        }
+        [[ "$DEFAULT_REMOTE_SESSION" == "x11" ]] || {
+          echo "ERROR: remote clipboard transport currently supports X11 only" >&2; return 1;
+        }
         ssh -o BatchMode=yes "$REMOTE_HOST" \
-          "DISPLAY=${DEFAULT_REMOTE_DISPLAY} XDG_SESSION_TYPE=${DEFAULT_REMOTE_SESSION} c --clipboard" < "$payload"
+          "DISPLAY='${DEFAULT_REMOTE_DISPLAY}' XDG_SESSION_TYPE=x11 c --clipboard" < "$payload"
         log_message "Copied to remote clipboard: $REMOTE_HOST"
       fi
       ;;
@@ -181,7 +258,7 @@ show_backends() {
     selected="unavailable"
   fi
 
-  cat <<INFO
+  cat <<INFO >&2
 catcopy backend report
 
 Environment:
@@ -212,23 +289,25 @@ clean_terminal_output() {
 import re
 import sys
 
-data = sys.stdin.buffer.read().decode("utf-8", "replace")
+data = sys.stdin.buffer.read()
 
-data = re.sub(r"\x1b\][^\a]*(?:\a|\x1b\\)", "", data)
-data = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", data)
-data = re.sub(r"\x1b[P^_].*?\x1b\\", "", data, flags=re.S)
-data = re.sub(r"\x1b[@-Z\\-_]", "", data)
+data = re.sub(rb"\x1b\][^\a]*(?:\a|\x1b\\)", b"", data)
+data = re.sub(rb"\x1b\[[0-9;?]*[ -/]*[@-~]", b"", data)
+data = re.sub(rb"\x1b[P^_].*?\x1b\\", b"", data, flags=re.S)
+data = re.sub(rb"\x1b[@-Z\\-_]", b"", data)
 
 cleaned = []
-for line in data.split("\n"):
-    if "\r" in line:
-        line = line.split("\r")[-1]
-    line = re.sub(r"^[⠁⠂⠄⡀⢀⠠⠐⠈⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*", "", line)
+for line in data.split(b"\n"):
+    if line.endswith(b"\r"):
+        line = line[:-1]
+    elif b"\r" in line:
+        line = line.split(b"\r")[-1]
+    line = re.sub("^[⠁⠂⠄⡀⢀⠠⠐⠈⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s*".encode(), b"", line)
     cleaned.append(line)
 
-out = "\n".join(cleaned)
-out = re.sub(r"[\x08\x0b\x0c]", "", out)
-sys.stdout.write(out)
+out = b"\n".join(cleaned)
+out = re.sub(rb"[\x08\x0b\x0c]", b"", out)
+sys.stdout.buffer.write(out)
 '
 }
 
@@ -303,6 +382,9 @@ Batch mode:
       Run command, append cleaned stdout+stderr to the named batch,
       and copy/send the entire batch.
 
+  c --batch <name> --raw -- <command> [args ...]
+      Append command output byte-for-byte without ANSI/progress cleanup.
+
   c --batch <name> --show
       Copy/send the current batch contents.
 
@@ -342,16 +424,15 @@ Environment:
 Notes:
   File mode adds transport headers.
   Stdin and normal command mode capture raw output.
-  Batch mode removes common ANSI terminal control sequences.
+  Batch mode removes common ANSI terminal control sequences by default;
+  --raw preserves command output bytes exactly (batch framing remains text).
   Remote mode requires SSH access to HOST and a working catcopy install there.
 HELP
 }
 
 copy_files() {
-  mkdir -p "$STATE_DIR"
-
   local tmp_payload
-  tmp_payload="$(mktemp "$STATE_DIR/files.XXXXXX")"
+  make_temp files; tmp_payload="$REPLY"
 
   {
     for file in "$@"; do
@@ -377,10 +458,8 @@ copy_files() {
 }
 
 copy_stdin() {
-  mkdir -p "$STATE_DIR"
-
   local tmp_payload
-  tmp_payload="$(mktemp "$STATE_DIR/stdin.XXXXXX")"
+  make_temp stdin; tmp_payload="$REPLY"
 
   cat > "$tmp_payload"
   copy_payload_file "$tmp_payload"
@@ -390,21 +469,23 @@ copy_stdin() {
 }
 
 copy_command() {
-  mkdir -p "$STATE_DIR"
-
   local tmp_payload
-  tmp_payload="$(mktemp "$STATE_DIR/command.XXXXXX")"
+  make_temp command; tmp_payload="$REPLY"
 
-  "$@" > "$tmp_payload"
+  local status=0
+  setsid -- "$@" > "$tmp_payload" &
+  CHILD_PID=$!
+  wait "$CHILD_PID" || status=$?
+  CHILD_PID=""
   copy_payload_file "$tmp_payload"
-  rm -f "$tmp_payload"
 
   log_message "Captured command output: $*"
+  return "$status"
 }
 
 batch_path() {
   local name="$1"
-  mkdir -p "$STATE_DIR"
+  ensure_state_dir || return 1
 
   if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "ERROR: invalid batch name: $name" >&2
@@ -415,11 +496,37 @@ batch_path() {
   echo "$STATE_DIR/${name}.txt"
 }
 
+validate_batch_file() {
+  local path="$1" uid owner mode links
+  if [[ -L "$path" ]]; then
+    echo "ERROR: refusing batch symlink: $path" >&2
+    return 1
+  fi
+  if [[ -e "$path" ]]; then
+    [[ -f "$path" ]] || { echo "ERROR: unsafe batch file: $path" >&2; return 1; }
+    uid="$(id -u)"; owner="$(stat -c %u -- "$path")"; mode="$(stat -c %a -- "$path")"; links="$(stat -c %h -- "$path")"
+    if [[ "$owner" != "$uid" || "$mode" != "600" || "$links" != "1" ]]; then
+      echo "ERROR: batch file must be owned by uid $uid and mode 0600: $path" >&2
+      return 1
+    fi
+  fi
+}
+
+create_batch_file() {
+  local path="$1"
+  if [[ ! -e "$path" && ! -L "$path" ]]; then
+    # Exclusive creation prevents a pre-existing path from being truncated.
+    (umask 077; set -o noclobber; : > "$path") 2>/dev/null || true
+  fi
+  validate_batch_file "$path"
+}
+
 batch_clear() {
   local name="$1"
   local path
   path="$(batch_path "$name")"
 
+  create_batch_file "$path" || return 1
   : > "$path"
   log_message "Cleared batch: $name"
   log_message "Path: $path"
@@ -429,6 +536,7 @@ batch_show() {
   local name="$1"
   local path
   path="$(batch_path "$name")"
+  validate_batch_file "$path" || return 1
 
   if [[ ! -f "$path" ]]; then
     echo "ERROR: batch does not exist: $name" >&2
@@ -443,16 +551,27 @@ batch_command() {
   local name="$1"
   shift
 
+  local raw=0
+  if [[ "${1:-}" == "--raw" ]]; then raw=1; shift; fi
+
   local path
   path="$(batch_path "$name")"
+  create_batch_file "$path" || return 1
 
   local tmp_output
-  tmp_output="$(mktemp "$STATE_DIR/${name}.cmd.XXXXXX")"
+  make_temp "${name}.cmd"; tmp_output="$REPLY"
+  local tmp_clean
+  make_temp "${name}.clean"; tmp_clean="$REPLY"
 
   local status=0
-  TERM=dumb NO_COLOR=1 COLUMNS=100000 "$@" 2>&1 | clean_terminal_output > "$tmp_output" || status=$?
+  TERM=dumb NO_COLOR=1 COLUMNS=100000 setsid -- "$@" > "$tmp_output" 2>&1 &
+  CHILD_PID=$!
+  wait "$CHILD_PID" || status=$?
+  CHILD_PID=""
+  if [[ "$raw" -eq 0 ]]; then clean_terminal_output < "$tmp_output" > "$tmp_clean"; mv "$tmp_clean" "$tmp_output"; fi
 
-  {
+  (
+    flock -x 9
     echo "===== COMMAND ====="
     printf '%q ' "$@"
     echo
@@ -461,9 +580,7 @@ batch_command() {
     echo "===== OUTPUT ====="
     cat "$tmp_output"
     echo
-  } >> "$path"
-
-  rm -f "$tmp_output"
+  ) 9>>"$path" >&9
 
   copy_payload_file "$path"
 
@@ -499,6 +616,13 @@ handle_batch() {
         exit 1
       fi
       batch_command "$name" "$@"
+      ;;
+    --raw)
+      shift
+      [[ "${1:-}" == "--" ]] || { echo "ERROR: expected -- after --raw" >&2; return 1; }
+      shift
+      [[ $# -gt 0 ]] || { echo "ERROR: missing command after --raw --" >&2; return 1; }
+      batch_command "$name" --raw "$@"
       ;;
     *)
       echo "ERROR: unknown batch operation: $1" >&2
