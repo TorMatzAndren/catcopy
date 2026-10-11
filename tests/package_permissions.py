@@ -10,6 +10,7 @@ import tarfile
 expected_files = {
     "usr/bin/c": 0o755,
     "usr/bin/catcopy": 0o755,
+    "usr/bin/catcopy-command-runner": 0o755,
     "usr/share/doc/catcopy/README.md": 0o644,
     "usr/share/doc/catcopy/LICENSE": 0o644,
 }
